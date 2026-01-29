@@ -1,0 +1,8 @@
+Plugin-Version: 0.0.1
+Plugin-Class: org.gameyfin.plugins.metadata.gog.GogPlugin
+Plugin-Id: org.gameyfin.plugins.metadata.gog
+Plugin-Name: GOG Metadata
+Plugin-Description: Fetches metadata from GOG.com
+Plugin-Author: mdmatthias
+Plugin-License: GPL-3.0
+Plugin-Url: https://github.com/mdmatthias/gameyfin-gog-metadata-plugin
