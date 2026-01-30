@@ -1,4 +1,4 @@
-package org.gameyfin.plugins.metadata.gog.dto
+package io.github.mdmatthias.gameyfin.plugins.gog.dto
 
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable

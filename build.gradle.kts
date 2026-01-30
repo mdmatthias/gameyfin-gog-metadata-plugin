@@ -6,7 +6,7 @@ plugins {
     kotlin("plugin.serialization") version "2.2.20"
 }
 
-group = "org.gameyfin.plugins"
+group = "io.github.mdmatthias.gameyfin.plugins"
 // Read version from MANIFEST.MF
 val manifestFile = file("src/main/resources/MANIFEST.MF")
 val manifestVersion: String? = if (manifestFile.exists()) {
@@ -20,15 +20,20 @@ repositories {
     mavenCentral()
 }
 
+java {
+    toolchain {
+        languageVersion.set(JavaLanguageVersion.of(21))
+    }
+}
+
 dependencies {
-    compileOnly(files("libs/plugin-api.jar"))
+    compileOnly("org.gameyfin:plugin-api:2.3.3")
     
     // PF4J
-    implementation("org.pf4j:pf4j:3.13.0")
+    compileOnly("org.pf4j:pf4j:3.13.0")
     ksp("care.better.pf4j:pf4j-kotlin-symbol-processing:2.2.20-1.0.3")
 
-    implementation("org.slf4j:slf4j-api:2.0.9") // Ensure SLF4J is available
-    implementation("io.github.oshai:kotlin-logging-jvm:7.0.3")
+    compileOnly("org.slf4j:slf4j-api:2.0.9") // Provided by host
 
     val ktor_version = "3.1.3"
     implementation("io.ktor:ktor-client-core:$ktor_version") { exclude(group = "org.slf4j") }
@@ -42,7 +47,6 @@ dependencies {
     implementation("io.github.resilience4j:resilience4j-all:$resilience4jVersion") { exclude(group = "org.slf4j") }
 
     implementation("me.xdrop:fuzzywuzzy:1.4.0")
-    implementation("org.jsoup:jsoup:1.20.1")
 }
 
 tasks.jar {
