@@ -20,6 +20,8 @@ data class GogSearchResultItem(
     val developers: List<String>? = null,
     val publishers: List<String>? = null,
     val genres: List<GogGenre>? = null,
+    val tags: List<GogTag>? = null,
+    val features: List<GogFeature>? = null,
     val releaseDate: String? = null,
     val storeReleaseDate: String? = null,
     val productType: String? = null,

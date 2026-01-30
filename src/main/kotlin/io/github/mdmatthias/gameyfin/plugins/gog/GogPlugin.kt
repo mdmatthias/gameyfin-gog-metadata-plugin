@@ -20,6 +20,9 @@ import org.gameyfin.pluginapi.core.wrapper.GameyfinPlugin
 import org.gameyfin.pluginapi.gamemetadata.GameMetadata
 import org.gameyfin.pluginapi.gamemetadata.GameMetadataProvider
 import org.gameyfin.pluginapi.gamemetadata.Platform
+import org.gameyfin.pluginapi.gamemetadata.Theme
+import org.gameyfin.pluginapi.gamemetadata.GameFeature
+import org.gameyfin.pluginapi.gamemetadata.Genre
 import io.github.mdmatthias.gameyfin.plugins.gog.dto.GogProductDetails
 import io.github.mdmatthias.gameyfin.plugins.gog.dto.GogSearchResponse
 import io.github.mdmatthias.gameyfin.plugins.gog.dto.GogSearchResultItem
@@ -54,8 +57,14 @@ class GogPlugin(wrapper: PluginWrapper) : GameyfinPlugin(wrapper) {
                 json(jsonConfig)
             }
         }
-        // api.gog.com has a rate limit of 200/hour -> 20/6min
+
         companion object {
+            private val catalogCache = object : java.util.LinkedHashMap<String, GogSearchResultItem>(100, 0.75f, true) {
+                override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, GogSearchResultItem>): Boolean {
+                    return size > 100
+                }
+            }
+            // api.gog.com has a rate limit of 200/hour -> 20/6min
             private val rateLimiter: RateLimiter = RateLimiter.of(
                 "gog-api",
                 RateLimiterConfig.custom()
@@ -113,6 +122,10 @@ class GogPlugin(wrapper: PluginWrapper) : GameyfinPlugin(wrapper) {
             if (searchResultItems.isEmpty()) return emptyList()
 
             val uniqueItems = searchResultItems.distinctBy { it.id }
+
+            synchronized(catalogCache) {
+                uniqueItems.forEach { catalogCache[it.id] = it }
+            }
 
             // Sort search results by fuzzy match with the requested title and filter by a minimum score (60)
             // This prevents that you get garbage results when a game is not found in the gog catalog
@@ -180,7 +193,12 @@ class GogPlugin(wrapper: PluginWrapper) : GameyfinPlugin(wrapper) {
                 null
             }
 
-            val genres = item.genres?.map { Mapper.genre(it.name) }?.toSet()
+            val allGogLabels = (item.genres?.map { it.name } ?: emptyList()) + 
+                               (item.tags?.map { it.name } ?: emptyList()) +
+                               (item.features?.map { it.name } ?: emptyList())
+            val genres = allGogLabels.map { Mapper.genre(it) }.filter { it != Genre.UNKNOWN }.toSet()
+            val themes = allGogLabels.map { Mapper.theme(it) }.filter { it != Theme.UNKNOWN }.toSet()
+            val features = allGogLabels.mapNotNull { Mapper.feature(it) }.toSet()
 
             val screenshotUris = item.screenshots?.mapNotNull { url ->
                 try {
@@ -212,6 +230,8 @@ class GogPlugin(wrapper: PluginWrapper) : GameyfinPlugin(wrapper) {
                 developedBy = item.developers?.toSet(),
                 publishedBy = item.publishers?.toSet(),
                 genres = genres,
+                themes = themes,
+                features = features,
                 keywords = null,
                 screenshotUrls = screenshotUris,
                 videoUrls = null
@@ -238,7 +258,12 @@ class GogPlugin(wrapper: PluginWrapper) : GameyfinPlugin(wrapper) {
         }
 
         private suspend fun searchStore(title: String): List<GogSearchResultItem> {
-            val cleanedTitle = title.replace(Regex("[^A-Za-z0-9 ]"), " ")
+            val cleanedTitle = title.replace(":", " ")
+                .replace("-", " ")
+                .replace(Regex("[^A-Za-z0-9' ]"), " ")
+                .replace(Regex("\\s+"), " ")
+                .trim()
+
             val response = client.get("https://catalog.gog.com/v1/catalog") {
                 parameter("limit", "20")
                 parameter("order", "desc:score")
@@ -269,9 +294,14 @@ class GogPlugin(wrapper: PluginWrapper) : GameyfinPlugin(wrapper) {
 
             val product: GogProductDetails = response.body()
 
-            // Try to find catalog item if not provided
-            val finalCatalogItem = catalogItem ?: try {
-                searchStore(product.title).find { it.id == id }
+            // Try to find catalog item in cache, or find by title search if missing
+            val finalCatalogItem = catalogItem ?: synchronized(catalogCache) { catalogCache[id] } ?: try {
+                val results = searchStore(product.title)
+                val found = results.find { it.id == id }
+                if (found != null) {
+                    synchronized(catalogCache) { catalogCache[id] = found }
+                }
+                found
             } catch (e: Exception) {
                 null
             }
@@ -316,7 +346,16 @@ class GogPlugin(wrapper: PluginWrapper) : GameyfinPlugin(wrapper) {
                 null
             }
 
-            val genres = (finalCatalogItem?.genres ?: product.genres)?.map { Mapper.genre(it.name) }?.toSet()
+            val gogGenres = finalCatalogItem?.genres ?: product.genres
+            val gogTags = finalCatalogItem?.tags ?: product.tags
+            val gogFeatures = finalCatalogItem?.features ?: product.features
+            val allGogLabels = (gogGenres?.map { it.name } ?: emptyList()) + 
+                               (gogTags?.map { it.name } ?: emptyList()) +
+                               (gogFeatures?.map { it.name } ?: emptyList())
+
+            val genres = allGogLabels.map { Mapper.genre(it) }.filter { it != Genre.UNKNOWN }.toSet()
+            val themes = allGogLabels.map { Mapper.theme(it) }.filter { it != Theme.UNKNOWN }.toSet()
+            val features = allGogLabels.mapNotNull { Mapper.feature(it) }.toSet()
 
             val screenshotUris = finalCatalogItem?.screenshots?.mapNotNull { url ->
                 try {
@@ -339,6 +378,8 @@ class GogPlugin(wrapper: PluginWrapper) : GameyfinPlugin(wrapper) {
                 developedBy = (product.developers ?: finalCatalogItem?.developers)?.toSet(),
                 publishedBy = (product.publishers ?: finalCatalogItem?.publishers)?.toSet(),
                 genres = genres,
+                themes = themes,
+                features = features,
                 keywords = null,
                 screenshotUrls = screenshotUris,
                 videoUrls = null

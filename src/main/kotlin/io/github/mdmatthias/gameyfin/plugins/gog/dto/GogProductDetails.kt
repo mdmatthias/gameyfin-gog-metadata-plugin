@@ -11,10 +11,22 @@ data class GogProductDetails(
     val images: GogImages? = null,
     @SerialName("content_system_compatibility") val systemCompatibility: GogSystemCompatibility? = null,
     val genres: List<GogGenre>? = null,
+    val tags: List<GogTag>? = null,
+    val features: List<GogFeature>? = null,
     @SerialName("release_date") val releaseDate: String? = null,
     val description: GogDescription? = null,
     val developers: List<String>? = null,
     val publishers: List<String>? = null
+)
+
+@Serializable
+data class GogTag(
+    val name: String
+)
+
+@Serializable
+data class GogFeature(
+    val name: String
 )
 
 @Serializable
