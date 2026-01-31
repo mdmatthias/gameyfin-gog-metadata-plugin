@@ -17,6 +17,11 @@ A metadata provider plugin for [Gameyfin](https://github.com/gameyfin/gameyfin) 
 - **Platform Support:** Correctly identifies platform compatibility (Windows, Linux, macOS).
 - **Performance:** Optimized search flow and ID-based caching to ensure a snappy user experience.
 
+## Screenshots
+<img width="1927" height="1264" alt="image" src="https://github.com/user-attachments/assets/2bdd6f44-ccfd-412c-a1c2-e5fda71998bd" />
+<img width="1927" height="1264" alt="image" src="https://github.com/user-attachments/assets/76b69838-fb95-4e32-bfdb-53a82af7f31a" />
+
+
 ## API Usage & Performance
 
 To prevent your IP from being blocked, the plugin automatically respects GOG's limit of ~200 requests per hour. It also uses smart caching to avoid asking GOG for the same data twice, which keeps the experience snappy and prevents unnecessary network traffic.
