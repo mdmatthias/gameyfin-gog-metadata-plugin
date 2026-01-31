@@ -1,4 +1,4 @@
-Plugin-Version: 0.0.3
+Plugin-Version: 0.0.4
 Plugin-Class: io.github.mdmatthias.gameyfin.plugins.gog.GogPlugin
 Plugin-Id: io.github.mdmatthias.gameyfin.plugins.gog
 Plugin-Name: GOG Metadata

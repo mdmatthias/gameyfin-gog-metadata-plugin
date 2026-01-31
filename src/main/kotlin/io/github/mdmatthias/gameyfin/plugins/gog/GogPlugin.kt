@@ -64,12 +64,12 @@ class GogPlugin(wrapper: PluginWrapper) : GameyfinPlugin(wrapper) {
                     return size > 100
                 }
             }
-            // api.gog.com has a rate limit of 200/hour -> 20/6min
+            // api.gog.com has a rate limit of 200/hour
             private val rateLimiter: RateLimiter = RateLimiter.of(
                 "gog-api",
                 RateLimiterConfig.custom()
-                    .limitForPeriod(20)
-                    .limitRefreshPeriod(Duration.ofMinutes(6))
+                    .limitForPeriod(200)
+                    .limitRefreshPeriod(Duration.ofHours(1))
                     .timeoutDuration(Duration.ofSeconds(5))
                     .build()
             )
