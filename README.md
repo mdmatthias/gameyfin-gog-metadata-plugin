@@ -8,14 +8,18 @@ A metadata provider plugin for [Gameyfin](https://github.com/gameyfin/gameyfin) 
   - Game Title and Description
   - Release Date
   - Developers and Publishers
-  - Genres and Tags
+  - **Categorization:** Maps GOG genres and tags to Gameyfin Genres, Themes, and Features (e.g., Singleplayer, Controller Support)
   - User Ratings
 - **Artwork:** Downloads high-quality assets:
   - Box art / Covers
   - Background headers / Banners
   - Screenshots
 - **Platform Support:** Correctly identifies platform compatibility (Windows, Linux, macOS).
-- **Resilience:** Built-in rate limiting and concurrency management to prevent API blocking.
+- **Performance:** Optimized search flow and ID-based caching to ensure a snappy user experience.
+
+## API Usage & Performance
+
+To prevent your IP from being blocked, the plugin automatically respects GOG's limit of ~200 requests per hour. It also uses smart caching to avoid asking GOG for the same data twice, which keeps the experience snappy and prevents unnecessary network traffic.
 
 ## Installation
 
