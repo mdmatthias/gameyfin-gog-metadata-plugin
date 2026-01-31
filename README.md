@@ -21,6 +21,11 @@ A metadata provider plugin for [Gameyfin](https://github.com/gameyfin/gameyfin) 
 
 To prevent your IP from being blocked, the plugin automatically respects GOG's limit of ~200 requests per hour. It also uses smart caching to avoid asking GOG for the same data twice, which keeps the experience snappy and prevents unnecessary network traffic.
 
+### Note: 
+When syncing libraries with more than 200 games, you may hit the GOG API rate limit.
+Consequence: Game descriptions may fail to download. However, all other metadata (titles, images, etc.) will still sync successfully via a separate, non-limited API.
+Solution: You can wait for the hourly limit to reset and re-sync metadata later, or import your games in smaller batches (e.g., 50 games at a time) to prevent this.
+
 ## Installation
 
 1.  Download the latest release jar (`gog-plugin-x.y.z.jar`) from the [Releases](https://github.com/mdmatthias/gameyfin-gog-metadata-plugin/releases) page.
