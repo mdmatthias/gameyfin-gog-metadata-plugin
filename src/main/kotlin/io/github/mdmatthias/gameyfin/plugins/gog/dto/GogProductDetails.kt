@@ -2,21 +2,37 @@ package io.github.mdmatthias.gameyfin.plugins.gog.dto
 
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.contentOrNull
 
 @Serializable
 data class GogProductDetails(
-    val id: Int,
-    val title: String,
-    val slug: String? = null,
-    val images: GogImages? = null,
-    @SerialName("content_system_compatibility") val systemCompatibility: GogSystemCompatibility? = null,
-    val genres: List<GogGenre>? = null,
-    val tags: List<GogTag>? = null,
-    val features: List<GogFeature>? = null,
-    @SerialName("release_date") val releaseDate: String? = null,
-    val description: GogDescription? = null,
-    val developers: List<String>? = null,
-    val publishers: List<String>? = null
+    val description: JsonElement? = null,
+    @SerialName("_embedded") val embedded: GogV2Embedded? = null,
+    val title: String? = null,
+    val id: Int? = null
+) {
+    val descriptionText: String?
+        get() {
+            return when (description) {
+                is JsonPrimitive -> description.contentOrNull
+                is JsonObject -> description["full"]?.let { (it as? JsonPrimitive)?.contentOrNull } 
+                              ?: description["lead"]?.let { (it as? JsonPrimitive)?.contentOrNull }
+                else -> null
+            }
+        }
+}
+
+@Serializable
+data class GogV2Embedded(
+    val product: GogV2Product? = null
+)
+
+@Serializable
+data class GogV2Product(
+    val title: String? = null
 )
 
 @Serializable
@@ -30,13 +46,15 @@ data class GogFeature(
 )
 
 @Serializable
+data class GogGenre(
+    val name: String
+)
+
+@Serializable
 data class GogImages(
     val background: String? = null,
     val logo: String? = null,
     val logo2x: String? = null,
-    // Sometimes it's an array of screenshots/gallery, but typical product api response structure varies.
-    // We might need to handle screenshots differently if not present here or use another endpoint.
-    // For now, let's assume we can get basic images.
 )
 
 @Serializable
@@ -47,12 +65,18 @@ data class GogSystemCompatibility(
 )
 
 @Serializable
-data class GogGenre(
-    val name: String
-)
-
-@Serializable
 data class GogDescription(
     val lead: String? = null,
     val full: String? = null
+)
+
+@Serializable
+data class GogScreenshot(
+    val formatted_images: List<GogFormattedImage>? = null
+)
+
+@Serializable
+data class GogFormattedImage(
+    val formatter_name: String? = null,
+    val image_url: String? = null
 )

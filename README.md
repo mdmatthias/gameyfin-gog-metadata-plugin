@@ -8,7 +8,7 @@ A metadata provider plugin for [Gameyfin](https://github.com/gameyfin/gameyfin) 
   - Game Title and Description
   - Release Date
   - Developers and Publishers
-  - **Categorization:** Maps GOG genres and tags to Gameyfin Genres, Themes, and Features (e.g., Singleplayer, Controller Support)
+  - Categorization: Maps GOG genres and tags to Gameyfin Genres, Themes, and Features (e.g., Singleplayer, Controller Support)
   - User Ratings
 - **Artwork:** Downloads high-quality assets:
   - Box art / Covers
@@ -24,12 +24,14 @@ A metadata provider plugin for [Gameyfin](https://github.com/gameyfin/gameyfin) 
 
 ## API Usage & Performance
 
-To prevent your IP from being blocked, the plugin automatically respects GOG's limit of ~200 requests per hour. It also uses smart caching to avoid asking GOG for the same data twice, which keeps the experience snappy and prevents unnecessary network traffic.
+~~To prevent your IP from being blocked, the plugin automatically respects GOG's limit of \~200 requests per hour. It also uses smart caching to avoid asking GOG for the same data twice, which keeps the experience snappy and prevents unnecessary network traffic.~~
 
-### Note: 
+~~### Note: 
 When syncing libraries with more than 200 games, you may hit the GOG API rate limit.
 Consequence: Game descriptions may fail to download. However, all other metadata (titles, images, etc.) will still sync successfully via a separate, non-limited API.
-Solution: You can wait for the hourly limit to reset and re-sync metadata later, or import your games in smaller batches (e.g., 50 games at a time) to prevent this.
+Solution: You can wait for the hourly limit to reset and re-sync metadata later, or import your games in smaller batches (e.g., 50 games at a time) to prevent this.~~
+
+**Moved from /products to /V2/games endpoint, this has no rate limit and all the info we need (game description).**
 
 ## Installation
 

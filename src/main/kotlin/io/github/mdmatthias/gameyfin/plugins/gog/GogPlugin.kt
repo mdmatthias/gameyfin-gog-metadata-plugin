@@ -5,12 +5,13 @@ import io.github.resilience4j.bulkhead.BulkheadConfig
 import io.github.resilience4j.decorators.Decorators
 import io.github.resilience4j.ratelimiter.RateLimiter
 import io.github.resilience4j.ratelimiter.RateLimiterConfig
+import io.github.resilience4j.retry.Retry
+import io.github.resilience4j.retry.RetryConfig
 import io.ktor.client.*
 import io.ktor.client.call.*
 import io.ktor.client.engine.cio.*
 import io.ktor.client.plugins.contentnegotiation.*
 import io.ktor.client.request.*
-import io.ktor.client.statement.*
 import io.ktor.http.*
 import io.ktor.serialization.kotlinx.json.*
 import kotlinx.coroutines.runBlocking
@@ -23,10 +24,7 @@ import org.gameyfin.pluginapi.gamemetadata.Platform
 import org.gameyfin.pluginapi.gamemetadata.Theme
 import org.gameyfin.pluginapi.gamemetadata.GameFeature
 import org.gameyfin.pluginapi.gamemetadata.Genre
-import io.github.mdmatthias.gameyfin.plugins.gog.dto.GogProductDetails
-import io.github.mdmatthias.gameyfin.plugins.gog.dto.GogSearchResponse
-import io.github.mdmatthias.gameyfin.plugins.gog.dto.GogSearchResultItem
-import io.github.mdmatthias.gameyfin.plugins.gog.dto.GogSystemCompatibility
+import io.github.mdmatthias.gameyfin.plugins.gog.dto.*
 import io.github.mdmatthias.gameyfin.plugins.gog.mapper.Mapper
 import org.pf4j.Extension
 import org.pf4j.PluginWrapper
@@ -64,22 +62,13 @@ class GogPlugin(wrapper: PluginWrapper) : GameyfinPlugin(wrapper) {
                     return size > 100
                 }
             }
-            // api.gog.com has a rate limit of 200/hour
-            private val rateLimiter: RateLimiter = RateLimiter.of(
+            
+            private val gogRateLimiter: RateLimiter = RateLimiter.of(
                 "gog-api",
-                RateLimiterConfig.custom()
-                    .limitForPeriod(200)
-                    .limitRefreshPeriod(Duration.ofHours(1))
-                    .timeoutDuration(Duration.ofSeconds(5))
-                    .build()
-            )
-            // catalog.gog.com does not seem to have a rate limit, but lets limit it to some sane values
-            private val searchRateLimiter: RateLimiter = RateLimiter.of(
-                "gog-search-api",
                 RateLimiterConfig.custom()
                     .limitForPeriod(4)
                     .limitRefreshPeriod(Duration.ofSeconds(1))
-                    .timeoutDuration(Duration.ofSeconds(2))
+                    .timeoutDuration(Duration.ofMinutes(10))
                     .build()
             )
             private val bulkhead: Bulkhead = Bulkhead.of(
@@ -87,6 +76,14 @@ class GogPlugin(wrapper: PluginWrapper) : GameyfinPlugin(wrapper) {
                 BulkheadConfig.custom()
                     .maxConcurrentCalls(8)
                     .maxWaitDuration(Duration.ofMinutes(10))
+                    .build()
+            )
+            private val retry: Retry = Retry.of(
+                "gog-api",
+                RetryConfig.custom<Any>()
+                    .maxAttempts(3)
+                    .waitDuration(Duration.ofSeconds(2))
+                    .retryExceptions(Exception::class.java)
                     .build()
             )
         }
@@ -99,160 +96,107 @@ class GogPlugin(wrapper: PluginWrapper) : GameyfinPlugin(wrapper) {
             platformFilter: Set<Platform>,
             maxResults: Int
         ): List<GameMetadata> {
-            val searchResultItems = mutableListOf<GogSearchResultItem>()
-
-            try {
-                searchResultItems.addAll(gogSearchCall { searchStore(gameTitle) })
+            val searchResultItems = try {
+                executeRequest { searchStore(gameTitle) }
             } catch (e: Exception) {
                 log.error("Failed to search GOG store: ${e.message}")
-            }
-
-            val normalizedTitle = gameTitle.replace(Regex("[^A-Za-z0-9 ]"), " ")
-            if (normalizedTitle.trim().endsWith(" game", ignoreCase = true)) {
-                val titleWithoutSuffix = normalizedTitle.substring(0, normalizedTitle.lastIndexOf(" game", ignoreCase = true)).trim()
-                if (titleWithoutSuffix.isNotEmpty()) {
-                    try {
-                        searchResultItems.addAll(gogSearchCall { searchStore(titleWithoutSuffix) })
-                    } catch (e: Exception) {
-                        log.warn("Failed to search GOG store for alternative title: ${e.message}")
-                    }
-                }
+                return emptyList()
             }
 
             if (searchResultItems.isEmpty()) return emptyList()
 
             val uniqueItems = searchResultItems.distinctBy { it.id }
-
             synchronized(catalogCache) {
                 uniqueItems.forEach { catalogCache[it.id] = it }
             }
 
-            // Sort search results by fuzzy match with the requested title and filter by a minimum score (60)
-            // This prevents that you get garbage results when a game is not found in the gog catalog
             val fuzzyResults = FuzzySearch.extractSorted(gameTitle, uniqueItems.map { it.title })
             val sortedItems = fuzzyResults
                 .filter { it.score >= 60 }
                 .map { uniqueItems[it.index] }
-
-            return sortedItems.asSequence()
-                .filter { item ->
-                    // Basic platform filtering based on what's available in the search result
-                    val itemPlatforms = item.operatingSystems?.mapNotNull { os ->
-                        when (os.lowercase()) {
-                            "windows" -> Platform.PC_MICROSOFT_WINDOWS
-                            "linux" -> Platform.LINUX
-                            "mac", "osx" -> Platform.MAC
-                            else -> null
-                        }
-                    }?.toSet() ?: emptySet()
-
-                    if (platformFilter.isEmpty()) true else itemPlatforms.intersect(platformFilter).isNotEmpty()
-                }
-                .map { toGameMetadata(it) }
                 .take(maxResults)
-                .toList()
+
+            return sortedItems.mapNotNull {
+                val itemPlatforms = toGameyfinPlatforms(it.operatingSystems)
+                
+                if (platformFilter.isNotEmpty() && itemPlatforms.intersect(platformFilter).isEmpty()) {
+                    return@mapNotNull null
+                }
+
+                // Call V2 API for each search result to get the description
+                val description = fetchDescriptionFromApi(it.id)
+                
+                toGameMetadata(it, description)
+            }
         }
 
         override fun fetchById(id: String): GameMetadata? {
-            return try {
-                gogApiCall { getGameDetails(id) }
+            var catalogItem = synchronized(catalogCache) { catalogCache[id] }
+            var description: String? = null
+
+            try {
+                // Always call V2 for details because it has the description
+                val v2Product = executeRequest { 
+                    val response = client.get("https://api.gog.com/v2/games/$id")
+                    if (response.status == HttpStatusCode.OK) {
+                        response.body<GogProductDetails>()
+                    } else null
+                }
+
+                if (v2Product != null) {
+                    description = v2Product.descriptionText
+                    
+                    if (catalogItem == null) {
+                        val v2Title = v2Product.embedded?.product?.title ?: v2Product.title
+                        if (v2Title != null) {
+                            val results = executeRequest { searchStore(v2Title) }
+                            
+                            catalogItem = results.find { it.id.toString() == id.toString() }
+                            
+                            if (catalogItem == null) {
+                                val fuzzy = FuzzySearch.extractOne(v2Title, results.map { it.title })
+                                if (fuzzy != null && fuzzy.score >= 90) {
+                                    catalogItem = results[fuzzy.index]
+                                }
+                            }
+                            
+                            if (catalogItem != null) {
+                                synchronized(catalogCache) { catalogCache[id] = catalogItem!! }
+                            }
+                        }
+                    }
+                }
             } catch (e: Exception) {
                 log.warn("Failed to fetch details for GOG app $id: ${e.message}")
-                null
             }
+
+            return if (catalogItem != null) {
+                toGameMetadata(catalogItem, description, overrideId = id)
+            } else null
         }
 
-        private fun toGameMetadata(item: GogSearchResultItem): GameMetadata {
-            val coverUrl = item.coverVertical
-            val coverUri = coverUrl?.let {
-                if (it.startsWith("//")) URI("https:$it") else URI(it)
-            }
-
-            val headerUrl = item.galaxyBackgroundImage
-            val headerUri = headerUrl?.let {
-                if (it.startsWith("//")) URI("https:$it") else URI(it)
-            }
-
-            // GOG Search result dates are often just "YYYY", "YYYY-MM-dd", or sometimes Unix timestamp.
-            // But based on DTO it's a String. Let's try basic parsing or ignore if complex.
-            // item.releaseDate might be "2015" or "1369288800"
-            val parsedReleaseDate = try {
-                 item.releaseDate?.let {
-                    if (it.matches(Regex("^\\d{4}$"))) {
-                        LocalDate.of(it.toInt(), 1, 1).atStartOfDay(ZoneId.of("UTC")).toInstant()
-                    } else if (it.matches(Regex("^\\d{10}$"))) {
-                        Instant.ofEpochSecond(it.toLong())
+        private fun fetchDescriptionFromApi(id: String): String? {
+            return try {
+                executeRequest {
+                    val response = client.get("https://api.gog.com/v2/games/$id")
+                    if (response.status == HttpStatusCode.OK) {
+                        response.body<GogProductDetails>().descriptionText
                     } else {
-                        // Try standard format
-                         LocalDate.parse(it, DateTimeFormatter.ofPattern("yyyy.MM.dd"))
-                            .atStartOfDay(ZoneId.of("UTC"))
-                            .toInstant()
+                        null
                     }
-                 }
+                }
             } catch (e: Exception) {
+                log.warn("Failed to fetch description for $id: ${e.message}")
                 null
             }
-
-            val allGogLabels = (item.genres?.map { it.name } ?: emptyList()) + 
-                               (item.tags?.map { it.name } ?: emptyList()) +
-                               (item.features?.map { it.name } ?: emptyList())
-            val genres = allGogLabels.map { Mapper.genre(it) }.filter { it != Genre.UNKNOWN }.toSet()
-            val themes = allGogLabels.map { Mapper.theme(it) }.filter { it != Theme.UNKNOWN }.toSet()
-            val features = allGogLabels.mapNotNull { Mapper.feature(it) }.toSet()
-
-            val screenshotUris = item.screenshots?.mapNotNull { url ->
-                try {
-                    val formattedUrl = url.replace("{formatter}", "1600")
-                    if (formattedUrl.startsWith("//")) URI("https:$formattedUrl") else URI(formattedUrl)
-                } catch (e: Exception) {
-                    null
-                }
-            }?.toSet()
-
-            val itemPlatforms = item.operatingSystems?.mapNotNull { os ->
-                when (os.lowercase()) {
-                    "windows" -> Platform.PC_MICROSOFT_WINDOWS
-                    "linux" -> Platform.LINUX
-                    "mac", "osx" -> Platform.MAC
-                    else -> null
-                }
-            }?.toSet() ?: emptySet()
-
-            return GameMetadata(
-                originalId = item.id,
-                title = item.title,
-                platforms = itemPlatforms,
-                description = null, // Description is not available in search results
-                coverUrls = coverUri?.let { setOf(it) },
-                headerUrls = headerUri?.let { setOf(it) },
-                release = parsedReleaseDate,
-                userRating = item.reviewsRating?.let { it * 2 },
-                developedBy = item.developers?.toSet(),
-                publishedBy = item.publishers?.toSet(),
-                genres = genres,
-                themes = themes,
-                features = features,
-                keywords = null,
-                screenshotUrls = screenshotUris,
-                videoUrls = null
-            )
         }
 
-        // Helper to enforce rate limit + bulkhead around suspend HTTP operations
-        private fun <T> gogApiCall(block: suspend () -> T): T {
+        private fun <T> executeRequest(block: suspend () -> T): T {
             val supplier = { runBlocking { block() } }
             val decorated = Decorators.ofSupplier(supplier)
                 .withBulkhead(bulkhead)
-                .withRateLimiter(rateLimiter)
-                .decorate()
-            return decorated.get()
-        }
-
-        // Helper to enforce rate limit for search operations
-        private fun <T> gogSearchCall(block: suspend () -> T): T {
-            val supplier = { runBlocking { block() } }
-            val decorated = Decorators.ofSupplier(supplier)
-                .withRateLimiter(searchRateLimiter)
+                .withRateLimiter(gogRateLimiter)
+                .withRetry(retry)
                 .decorate()
             return decorated.get()
         }
@@ -273,7 +217,6 @@ class GogPlugin(wrapper: PluginWrapper) : GameyfinPlugin(wrapper) {
             }
 
             if (response.status != HttpStatusCode.OK) {
-                log.warn("GOG search returned HTTP ${response.status}")
                 return emptyList()
             }
 
@@ -281,102 +224,48 @@ class GogPlugin(wrapper: PluginWrapper) : GameyfinPlugin(wrapper) {
             return searchResponse.products
         }
 
-        private suspend fun getGameDetails(
-            id: String,
-            platformFilter: Set<Platform> = emptySet(),
-            catalogItem: GogSearchResultItem? = null
-        ): GameMetadata? {
-            val response = client.get("https://api.gog.com/products/$id") {
-                parameter("expand", "description")
-            }
-
-            if (response.status != HttpStatusCode.OK) return null
-
-            val product: GogProductDetails = response.body()
-
-            // Try to find catalog item in cache, or find by title search if missing
-            val finalCatalogItem = catalogItem ?: synchronized(catalogCache) { catalogCache[id] } ?: try {
-                val results = searchStore(product.title)
-                val found = results.find { it.id == id }
-                if (found != null) {
-                    synchronized(catalogCache) { catalogCache[id] = found }
-                }
-                found
-            } catch (e: Exception) {
-                null
-            }
-
-            // Map platforms
-            val gamePlatforms = if (product.systemCompatibility != null) {
-                toGameyfinPlatforms(product.systemCompatibility)
-            } else {
-                emptySet()
-            }
-
-            val filteredPlatforms = if (platformFilter.isNotEmpty()) {
-                gamePlatforms.intersect(platformFilter)
-            } else {
-                gamePlatforms
-            }
-
-            if (filteredPlatforms.isEmpty() && platformFilter.isNotEmpty()) return null
-
-            val coverUrl = finalCatalogItem?.coverVertical ?: product.images?.logo2x ?: product.images?.logo
-            val coverUri = coverUrl?.let {
-                 if (it.startsWith("//")) URI("https:$it") else URI(it)
-            }
-
-            val headerUrl = finalCatalogItem?.galaxyBackgroundImage ?: product.images?.background
-            val headerUri = headerUrl?.let {
-                if (it.startsWith("//")) URI("https:$it") else URI(it)
-            }
+        private fun toGameMetadata(item: GogSearchResultItem, description: String? = null, overrideId: String? = null): GameMetadata {
+            val coverUri = item.coverVertical?.let { fixUrl(it) }
+            val headerUri = item.galaxyBackgroundImage?.let { fixUrl(it) }
 
             val parsedReleaseDate = try {
-                finalCatalogItem?.releaseDate?.let {
-                    LocalDate.parse(it, DateTimeFormatter.ofPattern("yyyy.MM.dd"))
-                        .atStartOfDay(ZoneId.of("UTC"))
-                        .toInstant()
-                } ?: product.releaseDate?.let {
-                    // Handle ISO 8601 with offset without colon (e.g. +0300)
-                    val formatter = DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ssZ")
-                    formatter.parse(it, Instant::from)
-                }
+                 item.releaseDate?.let {
+                    if (it.matches(Regex("^\\d{4}\\\$"))) {
+                        LocalDate.of(it.toInt(), 1, 1).atStartOfDay(ZoneId.of("UTC")).toInstant()
+                    } else if (it.matches(Regex("^\\d{10}\\\$"))) {
+                        Instant.ofEpochSecond(it.toLong())
+                    } else {
+                         LocalDate.parse(it, DateTimeFormatter.ofPattern("yyyy.MM.dd"))
+                            .atStartOfDay(ZoneId.of("UTC"))
+                            .toInstant()
+                    }
+                 }
             } catch (e: Exception) {
-                log.warn("Failed to parse release date for $id", e)
                 null
             }
 
-            val gogGenres = finalCatalogItem?.genres ?: product.genres
-            val gogTags = finalCatalogItem?.tags ?: product.tags
-            val gogFeatures = finalCatalogItem?.features ?: product.features
-            val allGogLabels = (gogGenres?.map { it.name } ?: emptyList()) + 
-                               (gogTags?.map { it.name } ?: emptyList()) +
-                               (gogFeatures?.map { it.name } ?: emptyList())
-
+            val allGogLabels = (item.genres?.map { it.name } ?: emptyList()) + 
+                               (item.tags?.map { it.name } ?: emptyList()) +
+                               (item.features?.map { it.name } ?: emptyList())
             val genres = allGogLabels.map { Mapper.genre(it) }.filter { it != Genre.UNKNOWN }.toSet()
             val themes = allGogLabels.map { Mapper.theme(it) }.filter { it != Theme.UNKNOWN }.toSet()
             val features = allGogLabels.mapNotNull { Mapper.feature(it) }.toSet()
 
-            val screenshotUris = finalCatalogItem?.screenshots?.mapNotNull { url ->
-                try {
-                    val formattedUrl = url.replace("{formatter}", "1600")
-                    if (formattedUrl.startsWith("//")) URI("https:$formattedUrl") else URI(formattedUrl)
-                } catch (e: Exception) {
-                    null
-                }
+            val screenshotUris = item.screenshots?.mapNotNull {
+                fixUrl(it.replace("{formatter}", "1600"))
             }?.toSet()
 
-            val metadata = GameMetadata(
-                originalId = id,
-                title = product.title,
-                platforms = filteredPlatforms,
-                description = product.description?.full ?: product.description?.lead,
+            return GameMetadata(
+                originalId = overrideId ?: item.id,
+                title = item.title,
+                platforms = toGameyfinPlatforms(item.operatingSystems),
+                description = description,
                 coverUrls = coverUri?.let { setOf(it) },
                 headerUrls = headerUri?.let { setOf(it) },
                 release = parsedReleaseDate,
-                userRating = finalCatalogItem?.reviewsRating?.let { it * 2 },
-                developedBy = (product.developers ?: finalCatalogItem?.developers)?.toSet(),
-                publishedBy = (product.publishers ?: finalCatalogItem?.publishers)?.toSet(),
+                userRating = item.reviewsRating?.let { it * 2 },
+                developedBy = item.developers?.toSet(),
+                publishedBy = item.publishers?.toSet(),
                 genres = genres,
                 themes = themes,
                 features = features,
@@ -384,16 +273,25 @@ class GogPlugin(wrapper: PluginWrapper) : GameyfinPlugin(wrapper) {
                 screenshotUrls = screenshotUris,
                 videoUrls = null
             )
-
-            return metadata
         }
 
-        private fun toGameyfinPlatforms(compatibility: GogSystemCompatibility): Set<Platform> {
-            val platforms = mutableSetOf<Platform>()
-            if (compatibility.windows) platforms.add(Platform.PC_MICROSOFT_WINDOWS)
-            if (compatibility.linux) platforms.add(Platform.LINUX)
-            if (compatibility.osx) platforms.add(Platform.MAC)
-            return platforms
+        private fun fixUrl(url: String): URI? {
+            return try {
+                if (url.startsWith("//")) URI("https:$url") else URI(url)
+            } catch (e: Exception) {
+                null
+            }
+        }
+
+        private fun toGameyfinPlatforms(os: List<String>?): Set<Platform> {
+            return os?.mapNotNull {
+                when (it.lowercase()) {
+                    "windows" -> Platform.PC_MICROSOFT_WINDOWS
+                    "linux" -> Platform.LINUX
+                    "mac", "osx" -> Platform.MAC
+                    else -> null
+                }
+            }?.toSet() ?: emptySet()
         }
     }
 }
