@@ -96,8 +96,10 @@ class GogPlugin(wrapper: PluginWrapper) : GameyfinPlugin(wrapper) {
             platformFilter: Set<Platform>,
             maxResults: Int
         ): List<GameMetadata> {
+            val cleanedTitle = gameTitle.removeSuffix("_base").removeSuffix("_game")
+
             val searchResultItems = try {
-                executeRequest { searchStore(gameTitle) }
+                executeRequest { searchStore(cleanedTitle) }
             } catch (e: Exception) {
                 log.error("Failed to search GOG store: ${e.message}")
                 return emptyList()
@@ -110,7 +112,7 @@ class GogPlugin(wrapper: PluginWrapper) : GameyfinPlugin(wrapper) {
                 uniqueItems.forEach { catalogCache[it.id] = it }
             }
 
-            val fuzzyResults = FuzzySearch.extractSorted(gameTitle, uniqueItems.map { it.title })
+            val fuzzyResults = FuzzySearch.extractSorted(cleanedTitle, uniqueItems.map { it.title })
             val sortedItems = fuzzyResults
                 .filter { it.score >= 60 }
                 .map { uniqueItems[it.index] }
