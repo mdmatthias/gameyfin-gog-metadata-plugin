@@ -24,14 +24,13 @@ A metadata provider plugin for [Gameyfin](https://github.com/gameyfin/gameyfin) 
 
 ## API Usage & Performance
 
-~~To prevent your IP from being blocked, the plugin automatically respects GOG's limit of \~200 requests per hour. It also uses smart caching to avoid asking GOG for the same data twice, which keeps the experience snappy and prevents unnecessary network traffic.~~
+The plugin leverages multiple GOG API endpoints to provide comprehensive metadata while maintaining high performance:
 
-~~### Note: 
-When syncing libraries with more than 200 games, you may hit the GOG API rate limit.
-Consequence: Game descriptions may fail to download. However, all other metadata (titles, images, etc.) will still sync successfully via a separate, non-limited API.
-Solution: You can wait for the hourly limit to reset and re-sync metadata later, or import your games in smaller batches (e.g., 50 games at a time) to prevent this.~~
+- **Catalog API (`catalog.gog.com/v1/catalog`):** Primary search endpoint for game titles, basic metadata, and store availability.
+- **GamesDb API (`gamesdb.gog.com/wishlist/wishlisted_games`):** Also known as the "Dreamlist" API. This is used as a secondary search source to enrich metadata and, crucially, to allow matching for games that have been delisted from the GOG store or are not available on GOG at all.
+- **V2 Games API (`api.gog.com/v2/games`):** Fetches detailed product information, including full game descriptions and developer/publisher details.
 
-**Moved from /products to /V2/games endpoint, this has no rate limit and all the info we need (game description).**
+The plugin utilizes smart caching and a unified rate limiter (4 requests per second) to ensure reliable operation and prevent IP rate-limiting. This architecture allows for snappy metadata retrieval even for large libraries without the strict limitations of older GOG API endpoints.
 
 ## Installation
 
