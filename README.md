@@ -17,10 +17,6 @@ A metadata provider plugin for [Gameyfin](https://github.com/gameyfin/gameyfin) 
 - **Platform Support:** Correctly identifies platform compatibility (Windows, Linux, macOS).
 - **Performance:** Optimized search flow and ID-based caching to ensure a snappy user experience.
 
-## Screenshots
-<img width="1927" height="1264" alt="image" src="https://github.com/user-attachments/assets/2bdd6f44-ccfd-412c-a1c2-e5fda71998bd" />
-<img width="1927" height="1264" alt="image" src="https://github.com/user-attachments/assets/76b69838-fb95-4e32-bfdb-53a82af7f31a" />
-
 
 ## API Usage & Performance
 
@@ -102,6 +98,11 @@ The compiled plugin will be available in:
 ## License
 
 This project is licensed under the [GNU Affero General Public License v3.0 (AGPL-3.0)](https://www.gnu.org/licenses/agpl-3.0.en.html).
+
+## Screenshots
+<img width="1927" height="1264" alt="image" src="https://github.com/user-attachments/assets/2bdd6f44-ccfd-412c-a1c2-e5fda71998bd" />
+<img width="1927" height="1264" alt="image" src="https://github.com/user-attachments/assets/76b69838-fb95-4e32-bfdb-53a82af7f31a" />
+
 
 ---
 *This plugin was developed with the assistance of AI (Gemini).*
