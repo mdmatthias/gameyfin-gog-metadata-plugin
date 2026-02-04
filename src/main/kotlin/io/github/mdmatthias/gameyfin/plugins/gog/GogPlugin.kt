@@ -127,8 +127,7 @@ class GogPlugin(wrapper: PluginWrapper) : GameyfinPlugin(wrapper) {
                 synchronized(catalogCache) { catalogCache[item.id] = item }
                 val itemPlatforms = toGameyfinPlatforms(item.operatingSystems)
                 if (platformFilter.isEmpty() || itemPlatforms.intersect(platformFilter).isNotEmpty()) {
-                    val description = fetchDescriptionFromApi(item.id)
-                    val metadata = toGameMetadata(item, description)
+                    val metadata = toGameMetadata(item, null)
                     allMetadataWithPriority.add(metadata to 1) // Source 1 = Catalog
                 }
             }
@@ -145,20 +144,56 @@ class GogPlugin(wrapper: PluginWrapper) : GameyfinPlugin(wrapper) {
 
             if (allMetadataWithPriority.isEmpty()) return emptyList()
 
-            // Filter out low-relevance garbage and sort by match quality
-            return allMetadataWithPriority
-                .map { it to FuzzySearch.tokenSetRatio(cleanedTitle.lowercase(), it.first.title.lowercase()) }
+            // Filter and sort
+            val sortedResults = allMetadataWithPriority
+                .map { it to FuzzySearch.weightedRatio(cleanedTitle.lowercase(), it.first.title.lowercase()) }
                 .filter { it.second >= 60 }
                 .sortedWith(
-                    compareByDescending<Pair<Pair<GameMetadata, Int>, Int>> { it.second } // Use the score
-                        .thenByDescending { it.first.first.title.equals(cleanedTitle, ignoreCase = true) }
+                    compareByDescending<Pair<Pair<GameMetadata, Int>, Int>> { it.first.first.title.trim().equals(cleanedTitle.trim(), ignoreCase = true) }
+                        .thenByDescending { it.second } // Fuzzy score
                         .thenByDescending { if (it.first.first.description.isNullOrBlank()) 0 else 1 }
                         .thenByDescending { it.first.second } // Source priority
-                ).map { 
-                    val metadata = it.first.first
-                    synchronized(metadataCache) { metadataCache[metadata.originalId] = metadata }
-                    metadata 
-                }.take(maxResults)
+                )
+
+            // Deduplicate by normalized title + year
+            val seen = mutableMapOf<String, Pair<GameMetadata, Int>>()
+            
+            for (result in sortedResults) {
+                val metadata = result.first.first
+                val source = result.first.second
+                val year = metadata.release?.let { java.time.OffsetDateTime.ofInstant(it, java.time.ZoneOffset.UTC).year }
+                val key = "${metadata.title.lowercase().replace(Regex("[^a-z0-9]"), "")}_$year"
+                
+                val existing = seen[key]
+                if (existing == null) {
+                    seen[key] = metadata to source
+                } else {
+                    // If we have a duplicate, merge it if the new one has better images
+                    val existingMetadata = existing.first
+                    if (existingMetadata.coverUrls.isNullOrEmpty() && !metadata.coverUrls.isNullOrEmpty()) {
+                        seen[key] = existingMetadata.copy(coverUrls = metadata.coverUrls) to existing.second
+                    }
+                    if (existingMetadata.headerUrls.isNullOrEmpty() && !metadata.headerUrls.isNullOrEmpty()) {
+                        val current = seen[key]!!
+                        seen[key] = current.first.copy(headerUrls = metadata.headerUrls) to current.second
+                    }
+                }
+            }
+
+            return seen.values
+                .take(maxResults)
+                .map { (metadata, source) ->
+                    // Fetch description if missing (especially for Catalog results)
+                    val finalMetadata = if (metadata.description.isNullOrBlank()) {
+                        val description = fetchDescriptionFromApi(metadata.originalId)
+                        if (description != null) metadata.copy(description = description) else metadata
+                    } else {
+                        metadata
+                    }
+                    
+                    synchronized(metadataCache) { metadataCache[finalMetadata.originalId] = finalMetadata }
+                    finalMetadata 
+                }
         }
 
         override fun fetchById(id: String): GameMetadata? {
@@ -239,7 +274,7 @@ class GogPlugin(wrapper: PluginWrapper) : GameyfinPlugin(wrapper) {
                 .trim()
 
             val response = client.get("https://catalog.gog.com/v1/catalog") {
-                parameter("limit", "20")
+                parameter("limit", "50")
                 parameter("order", "desc:score")
                 parameter("productType", "in:game,pack")
                 parameter("page", "1")
@@ -255,6 +290,7 @@ class GogPlugin(wrapper: PluginWrapper) : GameyfinPlugin(wrapper) {
             val response = client.get("https://gamesdb.gog.com/wishlist/wishlisted_games") {
                 parameter("title", title)
                 parameter("sort", "relevance")
+                parameter("limit", "50")
                 parameter("show_only_unreleased", "0")
             }
 
