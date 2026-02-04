@@ -43,12 +43,18 @@ Solution: You can wait for the hourly limit to reset and re-sync metadata later,
 
 ### Docker Compose
 
-If you are running Gameyfin using Docker Compose, you can mount the plugin JAR file as a volume:
+If you are running Gameyfin using Docker Compose, you can mount the plugin JAR file as a volume.
+It is also recommended to increase the maximum amount of database connections to prevent full library scans blocking the whole application from loading things. (See https://github.com/gameyfin/gameyfin/issues/867 )
 
 ```yaml
 services:
   gameyfin:
     # ... other configuration ...
+    environment:
+      # ... other env vars ...
+      SPRING_DATASOURCE_HIKARI_MAXIMUM_POOL_SIZE: 50
+      SPRING_DATASOURCE_HIKARI_CONNECTION_TIMEOUT: 60000
+    
     volumes:
       - /your/location/gog-plugin-x.x.x.jar:/opt/gameyfin/plugins/gog-plugin-x.x.x.jar
 ```
