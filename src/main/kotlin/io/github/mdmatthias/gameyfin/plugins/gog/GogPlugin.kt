@@ -62,11 +62,18 @@ class GogPlugin(wrapper: PluginWrapper) : GameyfinPlugin(wrapper) {
                     return size > 100
                 }
             }
+
+            private val metadataCache = object : java.util.LinkedHashMap<String, GameMetadata>(100, 0.75f, true) {
+                override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, GameMetadata>): Boolean {
+                    return size > 100
+                }
+            }
             
+            // Unified rate limiter: 1 request per second
             private val gogRateLimiter: RateLimiter = RateLimiter.of(
                 "gog-api",
                 RateLimiterConfig.custom()
-                    .limitForPeriod(4)
+                    .limitForPeriod(1)
                     .limitRefreshPeriod(Duration.ofSeconds(1))
                     .timeoutDuration(Duration.ofMinutes(10))
                     .build()
@@ -74,7 +81,7 @@ class GogPlugin(wrapper: PluginWrapper) : GameyfinPlugin(wrapper) {
             private val bulkhead: Bulkhead = Bulkhead.of(
                 "gog-api",
                 BulkheadConfig.custom()
-                    .maxConcurrentCalls(8)
+                    .maxConcurrentCalls(4)
                     .maxWaitDuration(Duration.ofMinutes(10))
                     .build()
             )
@@ -88,7 +95,7 @@ class GogPlugin(wrapper: PluginWrapper) : GameyfinPlugin(wrapper) {
             )
         }
 
-        override val supportedPlatforms: Set<Platform> =
+        override val supportedPlatforms: Set<Platform> = 
             setOf(Platform.PC_MICROSOFT_WINDOWS, Platform.LINUX, Platform.MAC)
 
         override fun fetchByTitle(
@@ -97,47 +104,83 @@ class GogPlugin(wrapper: PluginWrapper) : GameyfinPlugin(wrapper) {
             maxResults: Int
         ): List<GameMetadata> {
             val cleanedTitle = gameTitle.removeSuffix("_base").removeSuffix("_game")
+                .replace("_", " ").trim()
 
-            val searchResultItems = try {
+            // 1. Search both APIs
+            val catalogResults = try {
                 executeRequest { searchStore(cleanedTitle) }
             } catch (e: Exception) {
-                log.error("Failed to search GOG store: ${e.message}")
-                return emptyList()
+                log.error("Failed to search GOG catalog: ${e.message}")
+                emptyList()
             }
 
-            if (searchResultItems.isEmpty()) return emptyList()
-
-            val uniqueItems = searchResultItems.distinctBy { it.id }
-            synchronized(catalogCache) {
-                uniqueItems.forEach { catalogCache[it.id] = it }
+            val gamesDbResults = try {
+                executeRequest { searchGamesDb(cleanedTitle) }
+            } catch (e: Exception) {
+                log.error("Failed to search GOG GamesDb: ${e.message}")
+                emptyList()
             }
 
-            val fuzzyResults = FuzzySearch.extractSorted(cleanedTitle, uniqueItems.map { it.title })
-            val sortedItems = fuzzyResults
-                .filter { it.score >= 60 }
-                .map { uniqueItems[it.index] }
-                .take(maxResults)
+            // 2. Resolve to Metadata
+            val allMetadata = mutableListOf<GameMetadata>()
 
-            return sortedItems.mapNotNull {
-                val itemPlatforms = toGameyfinPlatforms(it.operatingSystems)
-                
-                if (platformFilter.isNotEmpty() && itemPlatforms.intersect(platformFilter).isEmpty()) {
-                    return@mapNotNull null
+            catalogResults.forEach { item ->
+                synchronized(catalogCache) { catalogCache[item.id] = item }
+                val itemPlatforms = toGameyfinPlatforms(item.operatingSystems)
+                if (platformFilter.isEmpty() || itemPlatforms.intersect(platformFilter).isNotEmpty()) {
+                    val description = fetchDescriptionFromApi(item.id)
+                    val metadata = toGameMetadata(item, description)
+                    synchronized(metadataCache) { metadataCache[item.id] = metadata }
+                    allMetadata.add(metadata)
                 }
-
-                // Call V2 API for each search result to get the description
-                val description = fetchDescriptionFromApi(it.id)
-                
-                toGameMetadata(it, description)
             }
+
+            gamesDbResults.forEach { item ->
+                // Use slug to make title unique if multiple entries exist
+                val displayTitle = if (item.slug != null && gamesDbResults.count { it.title == item.title } > 1) {
+                    "${item.title} (${item.slug})"
+                } else {
+                    item.title
+                }
+                val metadata = toGameMetadataFromGamesDb(item).copy(title = displayTitle)
+                synchronized(metadataCache) { metadataCache[item.id] = metadata }
+                allMetadata.add(metadata)
+            }
+
+            if (allMetadata.isEmpty()) return emptyList()
+
+            // 3. Custom Sorting:
+            // Priority 1: Fuzzy score
+            // Priority 2: Has description
+            return allMetadata.sortedWith(
+                compareByDescending<GameMetadata> { 
+                    FuzzySearch.ratio(cleanedTitle.lowercase(), it.title.lowercase()) 
+                }.thenByDescending { 
+                    if (it.description.isNullOrBlank()) 0 else 1 
+                }
+            ).take(maxResults)
         }
 
         override fun fetchById(id: String): GameMetadata? {
+            // 1. Check Metadata Cache (Reliable for GamesDb results)
+            synchronized(metadataCache) {
+                metadataCache[id]?.let { return it }
+            }
+
+            // 2. Handle very long IDs (GamesDb format)
+            if (id.length > 15) {
+                log.info("Attempting direct GamesDb fetch for long ID $id")
+                // GamesDb doesn't have a direct "get by ID" endpoint, we have to search
+                // For now, if it's not in cache, we might fail unless we re-search.
+                // We'll return null here and trust the search cache.
+                return null
+            }
+
+            // 3. Proceed with Catalog/V2 logic for standard IDs
             var catalogItem = synchronized(catalogCache) { catalogCache[id] }
             var description: String? = null
 
             try {
-                // Always call V2 for details because it has the description
                 val v2Product = executeRequest { 
                     val response = client.get("https://api.gog.com/v2/games/$id")
                     if (response.status == HttpStatusCode.OK) {
@@ -152,16 +195,13 @@ class GogPlugin(wrapper: PluginWrapper) : GameyfinPlugin(wrapper) {
                         val v2Title = v2Product.embedded?.product?.title ?: v2Product.title
                         if (v2Title != null) {
                             val results = executeRequest { searchStore(v2Title) }
-                            
                             catalogItem = results.find { it.id.toString() == id.toString() }
-                            
                             if (catalogItem == null) {
                                 val fuzzy = FuzzySearch.extractOne(v2Title, results.map { it.title })
                                 if (fuzzy != null && fuzzy.score >= 90) {
                                     catalogItem = results[fuzzy.index]
                                 }
                             }
-                            
                             if (catalogItem != null) {
                                 synchronized(catalogCache) { catalogCache[id] = catalogItem!! }
                             }
@@ -173,7 +213,9 @@ class GogPlugin(wrapper: PluginWrapper) : GameyfinPlugin(wrapper) {
             }
 
             return if (catalogItem != null) {
-                toGameMetadata(catalogItem, description, overrideId = id)
+                val metadata = toGameMetadata(catalogItem, description, overrideId = id)
+                synchronized(metadataCache) { metadataCache[id] = metadata }
+                metadata
             } else null
         }
 
@@ -183,12 +225,9 @@ class GogPlugin(wrapper: PluginWrapper) : GameyfinPlugin(wrapper) {
                     val response = client.get("https://api.gog.com/v2/games/$id")
                     if (response.status == HttpStatusCode.OK) {
                         response.body<GogProductDetails>().descriptionText
-                    } else {
-                        null
-                    }
+                    } else null
                 }
             } catch (e: Exception) {
-                log.warn("Failed to fetch description for $id: ${e.message}")
                 null
             }
         }
@@ -218,12 +257,21 @@ class GogPlugin(wrapper: PluginWrapper) : GameyfinPlugin(wrapper) {
                 parameter("query", cleanedTitle)
             }
 
-            if (response.status != HttpStatusCode.OK) {
-                return emptyList()
-            }
-
+            if (response.status != HttpStatusCode.OK) return emptyList()
             val searchResponse: GogSearchResponse = response.body()
             return searchResponse.products
+        }
+
+        private suspend fun searchGamesDb(title: String): List<GogGamesDbItem> {
+            val response = client.get("https://gamesdb.gog.com/wishlist/wishlisted_games") {
+                parameter("title", title)
+                parameter("sort", "relevance")
+                parameter("show_only_unreleased", "0")
+            }
+
+            if (response.status != HttpStatusCode.OK) return emptyList()
+            val gamesDbResponse: GogGamesDbResponse = response.body()
+            return gamesDbResponse.items
         }
 
         private fun toGameMetadata(item: GogSearchResultItem, description: String? = null, overrideId: String? = null): GameMetadata {
@@ -232,9 +280,9 @@ class GogPlugin(wrapper: PluginWrapper) : GameyfinPlugin(wrapper) {
 
             val parsedReleaseDate = try {
                  item.releaseDate?.let {
-                    if (it.matches(Regex("^\\d{4}\\\$"))) {
+                    if (it.matches(Regex("^\\d{4}$^"))) {
                         LocalDate.of(it.toInt(), 1, 1).atStartOfDay(ZoneId.of("UTC")).toInstant()
-                    } else if (it.matches(Regex("^\\d{10}\\\$"))) {
+                    } else if (it.matches(Regex("^\\d{10}$^"))) {
                         Instant.ofEpochSecond(it.toLong())
                     } else {
                          LocalDate.parse(it, DateTimeFormatter.ofPattern("yyyy.MM.dd"))
@@ -242,9 +290,7 @@ class GogPlugin(wrapper: PluginWrapper) : GameyfinPlugin(wrapper) {
                             .toInstant()
                     }
                  }
-            } catch (e: Exception) {
-                null
-            }
+            } catch (e: Exception) { null }
 
             val allGogLabels = (item.genres?.map { it.name } ?: emptyList()) + 
                                (item.tags?.map { it.name } ?: emptyList()) +
@@ -253,8 +299,8 @@ class GogPlugin(wrapper: PluginWrapper) : GameyfinPlugin(wrapper) {
             val themes = allGogLabels.map { Mapper.theme(it) }.filter { it != Theme.UNKNOWN }.toSet()
             val features = allGogLabels.mapNotNull { Mapper.feature(it) }.toSet()
 
-            val screenshotUris = item.screenshots?.mapNotNull {
-                fixUrl(it.replace("{formatter}", "1600"))
+            val screenshotUris = item.screenshots?.mapNotNull { url ->
+                fixUrl(url.replace("{formatter}", "1600"))
             }?.toSet()
 
             return GameMetadata(
@@ -277,12 +323,54 @@ class GogPlugin(wrapper: PluginWrapper) : GameyfinPlugin(wrapper) {
             )
         }
 
+        private fun toGameMetadataFromGamesDb(item: GogGamesDbItem): GameMetadata {
+            val coverUrl = item.verticalCover?.urlFormat ?: item.cover?.urlFormat
+            val coverUri = coverUrl?.let { fixGamesDbUrl(it, "_glx_vertical_cover") }
+
+            val headerUrl = item.background?.urlFormat ?: item.horizontal_artwork?.urlFormat
+            val headerUri = headerUrl?.let { fixGamesDbUrl(it, "_1600") }
+
+            val parsedReleaseDate = try {
+                item.firstReleaseDate?.let { Instant.parse(it) }
+            } catch (e: Exception) { null }
+
+            val allGogLabels = (item.genres?.map { it.name } ?: emptyList()) + 
+                               (item.themes?.map { it.name } ?: emptyList()) +
+                               (item.gameModes?.map { it.name } ?: emptyList())
+            val genres = allGogLabels.map { Mapper.genre(it) }.filter { it != Genre.UNKNOWN }.toSet()
+            val themes = allGogLabels.map { Mapper.theme(it) }.filter { it != Theme.UNKNOWN }.toSet()
+            val features = allGogLabels.mapNotNull { Mapper.feature(it) }.toSet()
+
+            val screenshotUris = item.screenshots?.mapNotNull { s -> fixGamesDbUrl(s.urlFormat, "_1600") }?.toSet()
+            val description = item.summary?.get("en-US") ?: item.summary?.get("*")
+
+            return GameMetadata(
+                originalId = item.id,
+                title = item.title,
+                platforms = setOf(Platform.PC_MICROSOFT_WINDOWS),
+                description = description,
+                coverUrls = coverUri?.let { setOf(it) },
+                headerUrls = headerUri?.let { setOf(it) },
+                release = parsedReleaseDate,
+                userRating = null,
+                developedBy = item.developers?.map { it.name }?.toSet(),
+                publishedBy = item.publishers?.map { it.name }?.toSet(),
+                genres = genres,
+                themes = themes,
+                features = features,
+                keywords = null,
+                screenshotUrls = screenshotUris,
+                videoUrls = null
+            )
+        }
+
         private fun fixUrl(url: String): URI? {
-            return try {
-                if (url.startsWith("//")) URI("https:$url") else URI(url)
-            } catch (e: Exception) {
-                null
-            }
+            return try { if (url.startsWith("////")) URI("https:$url") else URI(url) } catch (e: Exception) { null }
+        }
+
+        private fun fixGamesDbUrl(format: String, formatter: String): URI? {
+            val url = format.replace("{formatter}", formatter).replace("{ext}", "jpg")
+            return fixUrl(url)
         }
 
         private fun toGameyfinPlatforms(os: List<String>?): Set<Platform> {
