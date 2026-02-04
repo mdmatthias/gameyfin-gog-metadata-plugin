@@ -57,6 +57,30 @@ services:
     volumes:
       - /your/location/gog-plugin-x.x.x.jar:/opt/gameyfin/plugins/gog-plugin-x.x.x.jar
 ```
+Or if you want to automatically download the latest version when Gameyfin docker starts:
+```yaml
+services:
+  gameyfin:
+    # ... other configuration ...
+    environment:
+      # ... other env vars ...
+      SPRING_DATASOURCE_HIKARI_MAXIMUM_POOL_SIZE: 50
+      SPRING_DATASOURCE_HIKARI_CONNECTION_TIMEOUT: 60000
+    
+    volumes:
+      - "./plugins:/opt/gameyfin/plugins"
+    entrypoint:
+      # download latest GOG metadata plugin
+      - /bin/bash
+      - -c
+      - |
+        apt-get update && apt-get install -y curl jq
+        LATEST_URL=$$(curl -s https://api.github.com/repos/mdmatthias/gameyfin-gog-metadata-plugin/releases/latest | jq -r '.assets[] | select(.name | endswith(".jar")) | .browser_download_url' | head -n 1)
+        echo "Downloading latest GOG plugin from $$LATEST_URL"
+        curl -L -o /opt/gameyfin/plugins/gog-plugin-latest.jar "$$LATEST_URL"
+        echo "Starting Gameyfin..."
+        exec /entrypoint.sh
+```
 
 ## Development
 
