@@ -28,11 +28,30 @@ The plugin leverages multiple GOG API endpoints to provide comprehensive metadat
 
 The plugin utilizes smart caching and a unified rate limiter (4 requests per second) to ensure reliable operation and prevent IP rate-limiting. This architecture allows for snappy metadata retrieval even for large libraries without the strict limitations of older GOG API endpoints.
 
+## Plugin Variants
+
+Starting from version 0.0.7, the GOG plugin is provided in three different variants (JARs) to give users more flexibility in how they retrieve metadata:
+
+1.  **Combined (`gog-plugin-0.0.7.jar`):** This is the default variant (previously named `gog-plugin-x.y.z.jar`). It searches both the GOG Catalog and the GOG GamesDb (Dreamlist) APIs and merges the results into a single list (up to 10 results).
+2.  **Catalog Only (`gog-plugin-catalog-0.0.7.jar`):** This variant only searches the GOG Catalog API. Use this if you want cleaner, high-quality results for games actively sold on GOG and prefer using other plugins (like Steam or IGDB) for your non-GOG or delisted games.
+3.  **Dreamlist Only (`gog-plugin-dreamlist-0.0.7.jar`):** This variant only searches the GOG GamesDb (Dreamlist) API. This source is excellent for finding delisted or obscure games, but it can be **"noisy"** and may occasionally return duplicate entries or slightly less accurate matches.
+
+### Why use separate JARs?
+Each plugin in Gameyfin returns a maximum of 10 results per search. 
+
+- **Maximum Coverage:** By installing **both** the `catalog` and `dreamlist` JARs separately, you can get up to 20 results (10 from each). This is the best setup if you want to ensure a match is found even for the most obscure titles.
+- **Tailored Experience:** If you find the Dreamlist results too cluttered, you can simply install the `catalog` JAR. This ensures that your GOG results are always "clean," while you rely on other metadata providers for the rest of your library.
+
+**Important:** Do not install the `combined` JAR at the same time as the `catalog` or `dreamlist` JARs, as this will result in duplicate search results.
+
 ## Installation
 
-1.  Download the latest release jar (`gog-plugin-x.y.z.jar`) from the [Releases](https://github.com/mdmatthias/gameyfin-gog-metadata-plugin/releases) page.
+1.  Choose your preferred setup from the [Releases](https://github.com/mdmatthias/gameyfin-gog-metadata-plugin/releases) page:
+    *   **Integrated (Default):** Download `gog-plugin-0.0.7.jar`. This gives you one plugin entry in Gameyfin with combined results (up to 10).
+    *   **Maximum Results:** Download **both** `gog-plugin-catalog-0.0.7.jar` and `gog-plugin-dreamlist-0.0.7.jar`. This gives you two separate plugin entries in Gameyfin, allowing for up to 20 search results total.
+    *   **Standalone Specific:** Download **either** `gog-plugin-catalog-0.0.7.jar` or `gog-plugin-dreamlist-0.0.7.jar`. Use this if you only want results from one specific API (e.g., if you only want the "clean" Catalog results).
 2.  Navigate to your Gameyfin installation directory.
-3.  Place the `.jar` file into the `plugins/` folder.
+3.  Place the selected `.jar` file(s) into the `plugins/` folder.
     *   *Note: If the `plugins` folder does not exist, create it.*
 4.  Restart Gameyfin.
 
@@ -45,33 +64,24 @@ It is also recommended to increase the maximum amount of database connections to
 services:
   gameyfin:
     # ... other configuration ...
-    environment:
-      # ... other env vars ...
-      SPRING_DATASOURCE_HIKARI_MAXIMUM_POOL_SIZE: 50
-      SPRING_DATASOURCE_HIKARI_CONNECTION_TIMEOUT: 60000
-    
     volumes:
-      - /your/location/gog-plugin-x.x.x.jar:/opt/gameyfin/plugins/gog-plugin-x.x.x.jar
+      - /your/location/gog-plugin-0.0.7.jar:/opt/gameyfin/plugins/gog-plugin-0.0.7.jar
 ```
-Or if you want to automatically download the latest version when Gameyfin docker starts:
+
+Or if you want to automatically download the latest version when Gameyfin docker starts (example for the combined version):
 ```yaml
 services:
   gameyfin:
     # ... other configuration ...
-    environment:
-      # ... other env vars ...
-      SPRING_DATASOURCE_HIKARI_MAXIMUM_POOL_SIZE: 50
-      SPRING_DATASOURCE_HIKARI_CONNECTION_TIMEOUT: 60000
-    
     volumes:
       - "./plugins:/opt/gameyfin/plugins"
     entrypoint:
-      # download latest GOG metadata plugin
+      # download latest GOG metadata plugin (combined variant)
       - /bin/bash
       - -c
       - |
         apt-get update && apt-get install -y curl jq
-        LATEST_URL=$$(curl -s https://api.github.com/repos/mdmatthias/gameyfin-gog-metadata-plugin/releases/latest | jq -r '.assets[] | select(.name | endswith(".jar")) | .browser_download_url' | head -n 1)
+        LATEST_URL=$$(curl -s https://api.github.com/repos/mdmatthias/gameyfin-gog-metadata-plugin/releases/latest | jq -r '.assets[] | select(.name | (contains("combined") or (contains("gog-plugin") and (contains("catalog") | not) and (contains("dreamlist") | not))) and endswith(".jar")) | .browser_download_url' | head -n 1)
         echo "Downloading latest GOG plugin from $$LATEST_URL"
         curl -L -o /opt/gameyfin/plugins/gog-plugin-latest.jar "$$LATEST_URL"
         echo "Starting Gameyfin..."
@@ -86,14 +96,16 @@ services:
 
 ### Building the Plugin
 
-This project is a standard Gradle project. To build the plugin JAR:
+This project is a standard Gradle project. To build all plugin variants:
 
 ```bash
 ./gradlew build
 ```
 
-The compiled plugin will be available in:
-`build/libs/gog-plugin-VERSION.jar`
+The compiled plugin variants will be available in `build/libs/`:
+- `gog-plugin-VERSION.jar` (Combined)
+- `gog-plugin-catalog-VERSION.jar`
+- `gog-plugin-dreamlist-VERSION.jar`
 
 ## License
 
