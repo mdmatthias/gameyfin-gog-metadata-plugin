@@ -1,9 +1,9 @@
 import java.util.jar.Manifest
 
 plugins {
-    kotlin("jvm") version "2.2.20"
-    id("com.google.devtools.ksp") version "2.2.20-2.0.3"
-    kotlin("plugin.serialization") version "2.2.20"
+    kotlin("jvm") version "2.4.10"
+    id("com.google.devtools.ksp") version "2.3.11"
+    kotlin("plugin.serialization") version "2.4.10"
 }
 
 group = "io.github.mdmatthias.gameyfin.plugins"
@@ -22,26 +22,26 @@ repositories {
 
 java {
     toolchain {
-        languageVersion.set(JavaLanguageVersion.of(21))
+        languageVersion.set(JavaLanguageVersion.of(25))
     }
 }
 
 dependencies {
-    compileOnly("org.gameyfin:plugin-api:2.3.3")
+    compileOnly("org.gameyfin:plugin-api:2.5.0")
     
     // PF4J
-    compileOnly("org.pf4j:pf4j:3.13.0")
-    ksp("care.better.pf4j:pf4j-kotlin-symbol-processing:2.2.20-1.0.3")
+    compileOnly("org.pf4j:pf4j:3.15.0")
+    ksp("care.better.pf4j:pf4j-kotlin-symbol-processing:2.4.0-1.0.5")
 
     compileOnly("org.slf4j:slf4j-api:2.0.9") // Provided by host
 
-    val ktor_version = "3.1.3"
+    val ktor_version = "3.4.3"
     implementation("io.ktor:ktor-client-core:$ktor_version") { exclude(group = "org.slf4j") }
     implementation("io.ktor:ktor-client-cio:$ktor_version") { exclude(group = "org.slf4j") }
     implementation("io.ktor:ktor-client-content-negotiation:$ktor_version") { exclude(group = "org.slf4j") }
     implementation("io.ktor:ktor-serialization-kotlinx-json:$ktor_version") { exclude(group = "org.slf4j") }
 
-    val resilience4jVersion = "2.2.0"
+    val resilience4jVersion = "2.4.0"
     implementation("io.github.resilience4j:resilience4j-ratelimiter:$resilience4jVersion") { exclude(group = "org.slf4j") }
     implementation("io.github.resilience4j:resilience4j-bulkhead:$resilience4jVersion") { exclude(group = "org.slf4j") }
     implementation("io.github.resilience4j:resilience4j-all:$resilience4jVersion") { exclude(group = "org.slf4j") }

@@ -27,7 +27,7 @@ import org.gameyfin.pluginapi.gamemetadata.Genre
 import io.github.mdmatthias.gameyfin.plugins.gog.dto.*
 import io.github.mdmatthias.gameyfin.plugins.gog.mapper.Mapper
 import org.pf4j.Extension
-import org.pf4j.PluginWrapper
+import org.gameyfin.pluginapi.core.wrapper.PluginContext
 import org.slf4j.LoggerFactory
 import java.net.URI
 import java.time.Duration
@@ -36,7 +36,7 @@ import java.time.LocalDate
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 
-class GogPlugin(wrapper: PluginWrapper) : GameyfinPlugin(wrapper) {
+class GogPlugin(context: PluginContext) : GameyfinPlugin(context) {
 
     companion object {
         val jsonConfig = Json {

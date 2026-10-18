@@ -81,7 +81,7 @@ services:
 ## Development
 
 ### Prerequisites
-- JDK 21 or higher
+- JDK 25 or higher
 - [Gameyfin](https://github.com/gameyfin/gameyfin) (for testing)
 
 ### Building the Plugin
