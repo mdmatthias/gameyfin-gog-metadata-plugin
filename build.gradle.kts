@@ -1,4 +1,5 @@
 import java.util.jar.Manifest
+import java.util.Properties
 
 plugins {
     kotlin("jvm") version "2.4.10"
@@ -49,32 +50,135 @@ dependencies {
     implementation("me.xdrop:fuzzywuzzy:1.4.0")
 }
 
-tasks.jar {
-    duplicatesStrategy = DuplicatesStrategy.EXCLUDE
-    isZip64 = true
+tasks.register("jarCombined", Jar::class) {
     archiveBaseName.set("gog-plugin")
-
-    dependsOn("kspKotlin")
-
-    manifest {
-        from("./src/main/resources/MANIFEST.MF")
+    doFirst {
+        val props = Properties()
+        props.setProperty("gog.services", "all")
+        file("${layout.buildDirectory.get().asFile}/tmp/gog-config/gog.properties").apply {
+            parentFile.mkdirs()
+            writer().use { props.store(it, null) }
+        }
     }
+    from("${layout.buildDirectory.get().asFile}/tmp/gog-config")
+}
 
-    from(configurations.runtimeClasspath.get().map { if (it.isDirectory) it else zipTree(it) }) {
-        exclude("META-INF/*.SF")
-        exclude("META-INF/*.DSA")
-        exclude("META-INF/*.RSA")
+tasks.register("jarDreamlist", Jar::class) {
+    archiveBaseName.set("gog-plugin-dreamlist")
+    doFirst {
+        val props = Properties()
+        props.setProperty("gog.services", "dreamlist")
+        file("${layout.buildDirectory.get().asFile}/tmp/gog-config-dreamlist/gog.properties").apply {
+            parentFile.mkdirs()
+            writer().use { props.store(it, null) }
+        }
     }
-    
-    from(sourceSets["main"].output.classesDirs)
-    from(sourceSets["main"].resources)
+    from("${layout.buildDirectory.get().asFile}/tmp/gog-config-dreamlist")
+}
 
-    // Include KSP-generated resources
-    from(layout.buildDirectory.get().asFile.resolve("generated/ksp/main/resources"))
-
-    // Include logo file under META-INF/resources
-    from("src/main/resources") {
-        include("logo.*")
-        into("META-INF/resources")
+tasks.register("jarCatalog", Jar::class) {
+    archiveBaseName.set("gog-plugin-catalog")
+    doFirst {
+        val props = Properties()
+        props.setProperty("gog.services", "catalog")
+        file("${layout.buildDirectory.get().asFile}/tmp/gog-config-catalog/gog.properties").apply {
+            parentFile.mkdirs()
+            writer().use { props.store(it, null) }
+        }
     }
+    from("${layout.buildDirectory.get().asFile}/tmp/gog-config-catalog")
+}
+
+tasks.withType<Jar>().configureEach {
+    if (name in listOf("jarCombined", "jarDreamlist", "jarCatalog")) {
+        duplicatesStrategy = DuplicatesStrategy.EXCLUDE
+        isZip64 = true
+
+        dependsOn("kspKotlin")
+
+        manifest {
+            attributes(
+                "Plugin-Id" to when(name) {
+                    "jarCombined" -> "io.github.mdmatthias.gameyfin.plugins.gog"
+                    "jarDreamlist" -> "io.github.mdmatthias.gameyfin.plugins.gog-dreamlist"
+                    "jarCatalog" -> "io.github.mdmatthias.gameyfin.plugins.gog-catalog"
+                    else -> ""
+                },
+                "Plugin-Name" to when(name) {
+                    "jarCombined" -> "GOG Metadata"
+                    "jarDreamlist" -> "GOG Metadata (Dreamlist)"
+                    "jarCatalog" -> "GOG Metadata (Catalog)"
+                    else -> ""
+                },
+                "Plugin-Class" to when(name) {
+                    "jarCombined" -> "io.github.mdmatthias.gameyfin.plugins.gog.combined.GogCombinedPlugin"
+                    "jarDreamlist" -> "io.github.mdmatthias.gameyfin.plugins.gog.dreamlist.GogDreamlistPlugin"
+                    "jarCatalog" -> "io.github.mdmatthias.gameyfin.plugins.gog.catalog.GogCatalogPlugin"
+                    else -> ""
+                },
+                "Plugin-Version" to (manifestVersion ?: "1.0-SNAPSHOT"),
+                "Plugin-Description" to "Fetches metadata from GOG.com",
+                "Plugin-Author" to "mdmatthias",
+                "Plugin-License" to "AGPL-3.0",
+                "Plugin-Url" to "https://github.com/mdmatthias/gameyfin-gog-metadata-plugin"
+            )
+        }
+
+        from(configurations.runtimeClasspath.get().map { if (it.isDirectory) it else zipTree(it) }) {
+            exclude("META-INF/*.SF")
+            exclude("META-INF/*.DSA")
+            exclude("META-INF/*.RSA")
+        }
+
+        from(sourceSets["main"].output.classesDirs) {
+            // Exclude other plugin entry points
+            when(name) {
+                "jarCombined" -> {
+                    exclude("**/dreamlist/*")
+                    exclude("**/catalog/*")
+                }
+                "jarDreamlist" -> {
+                    exclude("**/combined/*")
+                    exclude("**/catalog/*")
+                }
+                "jarCatalog" -> {
+                    exclude("**/combined/*")
+                    exclude("**/dreamlist/*")
+                }
+            }
+        }
+        
+        from(sourceSets["main"].resources) {
+            exclude("MANIFEST.MF")
+        }
+
+        // Include KSP-generated resources, but filter extensions.idx
+        from(layout.buildDirectory.get().asFile.resolve("generated/ksp/main/resources")) {
+            filesMatching("META-INF/extensions.idx") {
+                filter { line ->
+                    val providerClass = when(this@configureEach.name) {
+                        "jarCombined" -> "io.github.mdmatthias.gameyfin.plugins.gog.combined.CombinedGogMetadataProvider"
+                        "jarDreamlist" -> "io.github.mdmatthias.gameyfin.plugins.gog.dreamlist.DreamlistGogMetadataProvider"
+                        "jarCatalog" -> "io.github.mdmatthias.gameyfin.plugins.gog.catalog.CatalogGogMetadataProvider"
+                        else -> ""
+                    }
+                    if (line == providerClass || line.startsWith("#")) line else null
+                }
+            }
+        }
+
+        // Include logo file under META-INF/resources
+        from("src/main/resources") {
+            include("logo.*")
+            into("META-INF/resources")
+        }
+    }
+}
+
+tasks.named("build") {
+    dependsOn("jarCombined", "jarDreamlist", "jarCatalog")
+}
+
+tasks.named("jar") {
+    enabled = false
 }
