@@ -1,5 +1,4 @@
 import java.util.jar.Manifest
-import java.util.Properties
 
 plugins {
     kotlin("jvm") version "2.4.10"
@@ -10,11 +9,12 @@ plugins {
 group = "io.github.mdmatthias.gameyfin.plugins"
 // Read version from MANIFEST.MF
 val manifestFile = file("src/main/resources/MANIFEST.MF")
-val manifestVersion: String? = if (manifestFile.exists()) {
-    runCatching {
-        Manifest(manifestFile.inputStream()).mainAttributes.getValue("Plugin-Version")
-    }.getOrNull()
+val manifestAttributes = if (manifestFile.exists()) {
+    runCatching { Manifest(manifestFile.inputStream()).mainAttributes }.getOrNull()
 } else null
+val manifestVersion: String? = manifestAttributes?.getValue("Plugin-Version")
+// Required by the Gameyfin plugin marketplace
+val manifestRequires: String = manifestAttributes?.getValue("Plugin-Requires") ?: ">=2.5.0"
 version = manifestVersion ?: "1.0-SNAPSHOT"
 
 repositories {
@@ -53,11 +53,10 @@ dependencies {
 tasks.register("jarCombined", Jar::class) {
     archiveBaseName.set("gog-plugin")
     doFirst {
-        val props = Properties()
-        props.setProperty("gog.services", "all")
         file("${layout.buildDirectory.get().asFile}/tmp/gog-config/gog.properties").apply {
             parentFile.mkdirs()
-            writer().use { props.store(it, null) }
+            // Written by hand: Properties.store() adds a timestamp, which breaks reproducible builds
+            writeText("gog.services=all\n")
         }
     }
     from("${layout.buildDirectory.get().asFile}/tmp/gog-config")
@@ -66,11 +65,9 @@ tasks.register("jarCombined", Jar::class) {
 tasks.register("jarDreamlist", Jar::class) {
     archiveBaseName.set("gog-plugin-dreamlist")
     doFirst {
-        val props = Properties()
-        props.setProperty("gog.services", "dreamlist")
         file("${layout.buildDirectory.get().asFile}/tmp/gog-config-dreamlist/gog.properties").apply {
             parentFile.mkdirs()
-            writer().use { props.store(it, null) }
+            writeText("gog.services=dreamlist\n")
         }
     }
     from("${layout.buildDirectory.get().asFile}/tmp/gog-config-dreamlist")
@@ -79,11 +76,9 @@ tasks.register("jarDreamlist", Jar::class) {
 tasks.register("jarCatalog", Jar::class) {
     archiveBaseName.set("gog-plugin-catalog")
     doFirst {
-        val props = Properties()
-        props.setProperty("gog.services", "catalog")
         file("${layout.buildDirectory.get().asFile}/tmp/gog-config-catalog/gog.properties").apply {
             parentFile.mkdirs()
-            writer().use { props.store(it, null) }
+            writeText("gog.services=catalog\n")
         }
     }
     from("${layout.buildDirectory.get().asFile}/tmp/gog-config-catalog")
@@ -93,6 +88,9 @@ tasks.withType<Jar>().configureEach {
     if (name in listOf("jarCombined", "jarDreamlist", "jarCatalog")) {
         duplicatesStrategy = DuplicatesStrategy.EXCLUDE
         isZip64 = true
+        // Reproducible JARs, so the published SHA-512 checksum can be verified against a rebuild
+        isPreserveFileTimestamps = false
+        isReproducibleFileOrder = true
 
         dependsOn("kspKotlin")
 
@@ -117,7 +115,12 @@ tasks.withType<Jar>().configureEach {
                     else -> ""
                 },
                 "Plugin-Version" to (manifestVersion ?: "1.0-SNAPSHOT"),
-                "Plugin-Description" to "Fetches metadata from GOG.com",
+                "Plugin-Requires" to manifestRequires,
+                "Plugin-Description" to when(name) {
+                    "jarDreamlist" -> "Fetches metadata from GOG.com (GOG GamesDb/Dreamlist API only)"
+                    "jarCatalog" -> "Fetches metadata from GOG.com (GOG Catalog API only)"
+                    else -> "Fetches metadata from GOG.com (Catalog and GamesDb/Dreamlist APIs combined)"
+                },
                 "Plugin-Author" to "mdmatthias",
                 "Plugin-License" to "AGPL-3.0",
                 "Plugin-Url" to "https://github.com/mdmatthias/gameyfin-gog-metadata-plugin"
@@ -128,6 +131,7 @@ tasks.withType<Jar>().configureEach {
             exclude("META-INF/*.SF")
             exclude("META-INF/*.DSA")
             exclude("META-INF/*.RSA")
+            exclude("META-INF/*.EC")
         }
 
         from(sourceSets["main"].output.classesDirs) {

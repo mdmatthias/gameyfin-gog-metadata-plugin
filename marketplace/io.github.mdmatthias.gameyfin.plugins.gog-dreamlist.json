@@ -1,0 +1,24 @@
+{
+  "$schema": "../schema/plugin-manifest.schema.json",
+  "id": "io.github.mdmatthias.gameyfin.plugins.gog-dreamlist",
+  "name": "GOG Metadata (Dreamlist)",
+  "shortDescription": "Fetches game metadata and artwork from GOG.com, using only the GOG GamesDb (Dreamlist) API.",
+  "description": "Searches only the GOG GamesDb/Dreamlist API. Good for delisted, obscure or non-GOG games, but results can be noisy (duplicates or less accurate matches).\n\nRetrieves title, description, release date, developers, publishers, genres, themes, features (e.g. singleplayer, controller support), user ratings, platforms (Windows, Linux, macOS), covers, headers and screenshots. Requests are cached and rate limited (4 requests per second).\n\nCombine it with *GOG Metadata (Catalog)* for up to 20 results.\n\n**Do not install this variant together with the other GOG Metadata variants**, except *Catalog* + *Dreamlist*, or you will get duplicate search results.",
+  "provider": "mdmatthias",
+  "license": "AGPL-3.0",
+  "projectUrl": "https://github.com/mdmatthias/gameyfin-gog-metadata-plugin",
+  "logo": "https://raw.githubusercontent.com/mdmatthias/gameyfin-gog-metadata-plugin/main/src/main/resources/logo.svg",
+  "types": [
+    "GameMetadataProvider"
+  ],
+  "tags": [
+    "metadata",
+    "gog",
+    "artwork",
+    "screenshots",
+    "delisted"
+  ],
+  "maintainers": [
+    "mdmatthias"
+  ]
+}

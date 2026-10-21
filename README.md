@@ -46,6 +46,16 @@ Each plugin in Gameyfin returns a maximum of 10 results per search.
 
 ## Installation
 
+### Gameyfin plugin marketplace (recommended)
+
+Requires Gameyfin 2.5.0 or newer.
+
+1.  Go to *Administration → Plugins → Marketplace*.
+2.  Install **one** of the setups described below: *GOG Metadata* (combined), or *GOG Metadata (Catalog)* and/or *GOG Metadata (Dreamlist)*.
+3.  Marketplace plugins are third-party plugins, so they are installed **disabled**. Enable them in the plugin overview.
+
+### Manual installation
+
 1.  Choose your preferred setup from the [Releases](https://github.com/mdmatthias/gameyfin-gog-metadata-plugin/releases) page:
     *   **Integrated (Default):** Download `gog-plugin-0.0.7.jar`. This gives you one plugin entry in Gameyfin with combined results (up to 10).
     *   **Maximum Results:** Download **both** `gog-plugin-catalog-0.0.7.jar` and `gog-plugin-dreamlist-0.0.7.jar`. This gives you two separate plugin entries in Gameyfin, allowing for up to 20 search results total.
@@ -106,6 +116,22 @@ The compiled plugin variants will be available in `build/libs/`:
 - `gog-plugin-VERSION.jar` (Combined)
 - `gog-plugin-catalog-VERSION.jar`
 - `gog-plugin-dreamlist-VERSION.jar`
+
+The build is reproducible: rebuilding the same commit gives JARs with the same SHA-512 checksum.
+
+### Releasing & publishing to the marketplace
+
+The three variants are listed in the [Gameyfin plugin marketplace](https://github.com/gameyfin/plugin-marketplace) as separate plugins. Their metadata (name, description, logo, tags, ...) lives in [`marketplace/`](marketplace).
+
+1.  Bump `Plugin-Version` in `src/main/resources/MANIFEST.MF` (and `Plugin-Requires` if the minimum Gameyfin version changes).
+2.  Commit, then tag and push: `git tag vX.Y.Z && git push origin vX.Y.Z`.
+3.  The release workflow builds the JARs, attaches them with their `.sha512` checksums and generates the marketplace manifests
+    (`io.github.mdmatthias.gameyfin.plugins.gog*.json`, including all previously published releases). It validates them with the marketplace's own `validate.py`.
+4.  Copy the three manifest JSON files from the GitHub release into `plugins/` of your fork of the marketplace and open a pull request.
+
+Published JARs must never be replaced, because the marketplace pins their checksum. Publish a new version instead.
+
+To generate the manifests locally: `python3 scripts/marketplace_manifests.py --version X.Y.Z --existing ../plugin-marketplace/plugins --out ../plugin-marketplace/plugins`.
 
 ## License
 
